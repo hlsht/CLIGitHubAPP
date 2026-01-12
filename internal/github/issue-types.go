@@ -1,4 +1,4 @@
-package githubcliapp
+package github
 
 import (
 	"encoding/json"
@@ -13,12 +13,12 @@ type IssueOptions struct {
 }
 
 type Issue struct {
-	Title       string    `json:"title"`
-	Desc        string    `json:"body"`
-	Assignees   Assignees `json:"assignees"`
-	Labels      Labels    `json:"labels"`
-	IssueNumber int       `json:"number"`
-	RepoName    string
+	Title     string    `json:"title"`
+	Desc      string    `json:"body"`
+	Assignees Assignees `json:"assignees"`
+	Labels    Labels    `json:"labels"`
+	Number    int       `json:"number"`
+	RepoName  string
 }
 
 type Assignees struct {
@@ -39,7 +39,7 @@ type Label struct {
 	Name string `json:"name"`
 }
 
-func (a *Assignees) MarshalJSON() ([]byte, error) {
+func (a Assignees) MarshalJSON() ([]byte, error) {
 	if len(a.Post) > 0 {
 		return json.Marshal(a.Post)
 	}
@@ -61,7 +61,7 @@ func (a *Assignees) UnmarshalJSON(data []byte) error {
 	return fmt.Errorf("cannot unmarshal assignees: %s", string(data))
 }
 
-func (l *Labels) MarshalJSON() ([]byte, error) {
+func (l Labels) MarshalJSON() ([]byte, error) {
 	if len(l.Post) > 0 {
 		return json.Marshal(l.Post)
 	}

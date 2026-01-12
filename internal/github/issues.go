@@ -1,61 +1,62 @@
-package githubcliapp
+package github
 
 import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"flag"
+	"strconv"
+
+	// "flag"
 	"fmt"
-	"io"
+	// "io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
+
+	// "strconv"
 	"strings"
 	"unicode"
 )
 
-func CreateIssue() {
-	issueOpts := ParseIssueOptionsFromCommandArgs()
+func (a *App) CreateIssue() {
+	var issue Issue
 
-	if issueOpts.RepoName == "" {
-		log.Fatalf("%s: create-issue: -r flag needs to be set.\n", os.Args[0])
-	}
-	if issueOpts.Title == "" {
-		log.Fatalf("%s: create-issue: -t flag cannot contain empty string.\n", os.Args[0])
-	}
-	if issueOpts.Desc == "" {
-		issueOpts.Desc = getFromEditor()
-	}
+	fmt.Print("Enter the name of the repository you want to create an issue for: ")
+	issue.RepoName = getString()
+	fmt.Print("Enter the title of the issue you want to create: ")
+	issue.Title = getString()
+	issue.Desc = getFromEditor()
 	fmt.Print("Enter labels to associate with this issue separeted with comma: ")
 	labels := getLabels()
-	issue := &Issue{Title: issueOpts.Title, Desc: issueOpts.Desc, RepoName: issueOpts.RepoName}
-	username := Whoami()
+	username := a.Whoami()
 	issue.Assignees.Post = []string{username}
 	issue.Labels.Post = labels
 
-	repos := ListRepos()
-	if !isRepoExist(issue.RepoName, repos) {
-		log.Fatalf("%s: repo with name '%s' does not exist.\n", os.Args[0], issue.RepoName)
+	authToken := a.getAuthToken()
+	paramsJSON, err := json.Marshal(issue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error marshaling Go struct: %s\n", err)
+		os.Exit(1)
 	}
 
-	authToken := GetAuthToken()
-	paramsJSON, err := json.Marshal(issue)
+	req, err := a.NewRequest("POST",
+		fmt.Sprintf("https://api.github.com/repos/%s/%s/issues", username, issue.RepoName),
+		bytes.NewBuffer(paramsJSON),
+		map[string]string{
+			"Authorization": "Bearer " + authToken,
+			"Content-Type":  "application/json",
+		})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error making request: %s", err)
+		os.Exit(1)
+	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("https://api.github.com/repos/%s/%s/issues", username, issue.RepoName), bytes.NewBuffer(paramsJSON))
-	Check(err)
-
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+authToken)
-	req.Header.Set("User-Agent", "CliGithubApp")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	Check(err)
-	defer resp.Body.Close()
+	resp, err := a.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error while requesting: %s\n", err)
+		os.Exit(1)
+	}
 
 	if resp.StatusCode != http.StatusCreated {
 		log.Fatalf("%s: issues was not created: %s\n", os.Args[0], resp.Status)
@@ -64,32 +65,35 @@ func CreateIssue() {
 	}
 }
 
-func isRepoExist(repoName string, repos []Repo) bool {
-	for _, repo := range repos {
-		if repoName == repo.Name {
-			return true
-		}
-	}
-	return false
-}
+// func (a *App) isRepoExist(repo string) {
+// }
 
-func ParseIssueOptionsFromCommandArgs() *IssueOptions {
-	fs := flag.NewFlagSet("issue-options", flag.ExitOnError)
-	repoName := fs.String("r", "", "the repository")
-	title := fs.String("t", "", "title of an issue")
-	desc := fs.String("d", "", "description of an issue")
-	number := fs.Int("n", -1, "number of an issue")
-	fs.Parse(os.Args[2:])
-
-	return &IssueOptions{Title: *title, Desc: *desc, RepoName: *repoName, Number: *number}
-}
-
+//	func isRepoExist(repoName string, repos []Repo) bool {
+//		for _, repo := range repos {
+//			if repoName == repo.Name {
+//				return true
+//			}
+//		}
+//		return false
+//	}
+//
+//	func ParseIssueOptionsFromCommandArgs() *IssueOptions {
+//		fs := flag.NewFlagSet("issue-options", flag.ExitOnError)
+//		repoName := fs.String("r", "", "the repository")
+//		title := fs.String("t", "", "title of an issue")
+//		desc := fs.String("d", "", "description of an issue")
+//		number := fs.Int("n", -1, "number of an issue")
+//		fs.Parse(os.Args[2:])
+//
+//		return &IssueOptions{Title: *title, Desc: *desc, RepoName: *repoName, Number: *number}
+//	}
 func getFromEditor() string {
 	userMessage := `
 
 # Write description to an issue.
 # Use "<Esc>:wq" to quit text Editor and save your desc.
 # Lines starting with '#' will be ignored`
+
 	tempFile, err := os.CreateTemp("", "issue-message-*.txt")
 	Check(err)
 	defer os.Remove(tempFile.Name())
@@ -119,73 +123,96 @@ func getFromEditor() string {
 	return strings.TrimFunc(output.String(), unicode.IsSpace)
 }
 
-func ListIssues() []Issue {
-	issueOpts := ParseIssueOptionsFromCommandArgs()
-	if issueOpts.RepoName == "" {
-		log.Fatalf("%s: list-issues: -r flag needs to be set.\n", os.Args[0])
-	}
+func (a *App) ListIssues() []Issue {
+	var issue Issue
+
+	fmt.Print("Enter the name of the repository you want to create an issue for: ")
+	issue.RepoName = getString()
 	var issues []Issue
 
-	username := Whoami()
-	authToken := GetAuthToken()
+	username := a.Whoami()
+	authToken := a.getAuthToken()
 
-	req, err := http.NewRequest("GET", fmt.Sprintf("https://api.github.com/repos/%s/%s/issues", username, issueOpts.RepoName), nil)
-	Check(err)
+	req, err := a.NewRequest("GET",
+		fmt.Sprintf("https://api.github.com/repos/%s/%s/issues", username, issue.RepoName),
+		nil,
+		map[string]string{
+			"Authorization": "Bearer " + authToken,
+			"Content-Type":  "application/json",
+		})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error making request: %s", err)
+		os.Exit(1)
+	}
 
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+authToken)
-	req.Header.Set("User-Agent", "CliGithubApp")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	Check(err)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error while requesting: %s\n", err)
+		os.Exit(1)
+	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("%s: couldn't get issue related to repository '%s': %s\n", os.Args[0], issueOpts.RepoName, resp.Status)
+		fmt.Fprintf(os.Stderr, "ghcli: couldn't get issue related to repository '%s': %s\n",
+			issue.RepoName, resp.Status)
+		os.Exit(1)
 	}
-	body, err := io.ReadAll(resp.Body)
-	Check(err)
-
-	err = json.Unmarshal(body, &issues)
-	Check(err)
+	if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error unmarshaling json: %s\n", err)
+		os.Exit(1)
+	}
 
 	return issues
 }
 
-func GetIssue() {
-	issueOpts := ParseIssueOptionsFromCommandArgs()
-	if issueOpts.RepoName == "" {
-		log.Fatalf("%s: get-issues: -r flag needs to be set.\n", os.Args[0])
+func (a *App) GetIssue() *Issue {
+	var issue Issue
+	var err error
+	fmt.Print("Enter the name of the repository you want to create an issue for: ")
+	issue.RepoName = getString()
+	fmt.Print("Enter the issue number: ")
+	issue.Number, err = strconv.Atoi(getString())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error parsing input: %s\n", err)
+		os.Exit(1)
 	}
-	if issueOpts.Number == -1 {
-		log.Fatalf("%s: get-issues: -n flag needs to be assigned.\n", os.Args[0])
+	username := a.Whoami()
+	authToken := a.getAuthToken()
+
+	req, err := a.NewRequest("GET",
+		fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d",
+			username, issue.RepoName, issue.Number), nil, map[string]string{
+			"Authorization": "Bearer " + authToken,
+		})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error making request: %s", err)
+		os.Exit(1)
 	}
 
-	issues := ListIssues()
-	searchedFor := findIssue(issues, issueOpts.Number)
-	if searchedFor == nil {
-		fmt.Fprintf(os.Stderr, "There is no issue with number: #%d for '%s' repo.\n", issueOpts.Number, issueOpts.RepoName)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error while requesting: %s\n", err)
+		os.Exit(1)
 	}
-	displayIssue(searchedFor)
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "ghcli: couldn't get issue related to repository '%s': %s\n",
+			issue.RepoName, resp.Status)
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&issue); err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error unmarshaling json: %s\n", err)
+		os.Exit(1)
+	}
+
+	return &issue
 }
 
-func displayIssue(issue *Issue) {
-	fmt.Printf("Issue #%d\n", issue.IssueNumber)
+func DisplayIssue(issue *Issue) {
+	fmt.Printf("Issue #%d\n", issue.Number)
 	fmt.Printf("Title: %s\n", issue.Title)
 	fmt.Printf("Description: %s\n", issue.Desc)
 	displayStringsWithComma("Assignee", issue.Assignees.Post)
 	displayStringsWithComma("Label", issue.Labels.Post)
-}
-
-func findIssue(issues []Issue, number int) *Issue {
-	for _, issue := range issues {
-		if issue.IssueNumber == number {
-			return &issue
-		}
-	}
-	return nil
 }
 
 func displayStringsWithComma(title string, values []string) {
@@ -204,31 +231,23 @@ func displayStringsWithComma(title string, values []string) {
 	}
 }
 
-func UpdateIssue() {
+func (a *App) UpdateIssue() {
+	issue := &Issue{}
+	var err error
 	options := []string{
 		"Change issue's title.",
 		"Change issue's description(you will be moved to an editor to type a description).",
 		"Add assignee to an issue.",
 		"Add labels to an issue",
 	}
-	issueOpts := ParseIssueOptionsFromCommandArgs()
-	if issueOpts.RepoName == "" {
-		log.Fatalf("%s: update-issue: -r flag needs to be set.\n", os.Args[0])
-	}
-	if issueOpts.Number == -1 {
-		log.Fatalf("%s: update-issues: -n flag needs to be assigned.\n", os.Args[0])
-	}
-
-	issues := ListIssues()
-	searchedFor := findIssue(issues, issueOpts.Number)
-	if searchedFor == nil {
-		log.Fatalf("There is no issue with number: #%d for '%s' repo.\n", issueOpts.Number, issueOpts.RepoName)
-	}
-	displayIssue(searchedFor)
+	issue = a.GetIssue()
+	DisplayIssue(issue)
 
 	hasUpdate := false
 	for {
-		displayOptions(options, fmt.Sprintf("Pick an action that you want to do with issue(type 0-%d, or -1 to exit): ", len(options)-1))
+		displayOptions(options,
+			fmt.Sprintf("Pick an action that you want to do with issue(type 0-%d, or -1 to exit): ",
+				len(options)-1))
 		picked := getUpdateOption(options)
 		if picked == -1 {
 			break
@@ -237,21 +256,21 @@ func UpdateIssue() {
 		switch picked {
 		case 0:
 			fmt.Print("Enter new issue's title: ")
-			searchedFor.Title = getString()
+			issue.Title = getString()
 		case 1:
-			searchedFor.Desc = getFromEditor()
+			issue.Desc = getFromEditor()
 		case 2:
 			fmt.Print("Enter new assignee's username: ")
 			assignee := getString()
-			if !checkUserToExist(assignee) {
+			if !a.checkUserToExist(assignee) {
 				fmt.Fprintf(os.Stderr, "%s: update-issue: user '%s' does not exist.\n", os.Args[0], assignee)
 				break
 			}
-			searchedFor.Assignees.Post = append(searchedFor.Assignees.Post, assignee)
-			searchedFor.Assignees.Get = append(searchedFor.Assignees.Get, &User{Login: assignee})
+			issue.Assignees.Post = append(issue.Assignees.Post, assignee)
+			issue.Assignees.Get = append(issue.Assignees.Get, &User{Login: assignee})
 		case 3:
 			fmt.Print("Enter labels to associate with this issue separeted with comma: ")
-			searchedFor.Labels.Post = getLabels()
+			issue.Labels.Post = getLabels()
 		}
 	}
 
@@ -259,23 +278,27 @@ func UpdateIssue() {
 		return
 	}
 
-	username := Whoami()
-	authToken := GetAuthToken()
-	paramsJSON, err := json.Marshal(searchedFor)
+	username := a.Whoami()
+	authToken := a.getAuthToken()
+	paramsJSON, err := json.Marshal(issue)
 
-	req, err := http.NewRequest("PATCH", fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d", username, issueOpts.RepoName, searchedFor.IssueNumber), bytes.NewBuffer(paramsJSON))
-	Check(err)
+	req, err := a.NewRequest("PATCH",
+		fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d",
+			username, issue.RepoName, issue.Number),
+		bytes.NewBuffer(paramsJSON), map[string]string{
+			"Content-Type":  "application/json",
+			"Authorization": "Bearer " + authToken,
+		})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error making request: %s", err)
+		os.Exit(1)
+	}
 
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+authToken)
-	req.Header.Set("User-Agent", "CliGithubApp")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	Check(err)
-	defer resp.Body.Close()
+	resp, err := a.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error while requesting: %s\n", err)
+		os.Exit(1)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		log.Fatalf("%s: issues was not updated: %s\n", os.Args[0], resp.Status)
@@ -322,105 +345,51 @@ func getLabels() []string {
 	return output
 }
 
-func checkUserToExist(username string) bool {
-	req, err := http.NewRequest("GET", fmt.Sprintf("https://api.github.com/users/%s", username), nil)
-	Check(err)
+func (a *App) checkUserToExist(username string) bool {
+	req, err := a.NewRequest("GET",
+		fmt.Sprintf("https://api.github.com/users/%s", username), nil, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error making request: %s", err)
+		os.Exit(1)
+	}
 
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "CliGithubApp")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	Check(err)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error while requesting: %s\n", err)
+		os.Exit(1)
+	}
 
 	return resp.StatusCode == http.StatusOK
 }
 
-func LockIssue() {
-	options := []string{
-		"off-topic",
-		"too heated",
-		"resolved",
-		"spam",
-	}
-	issueOpts := ParseIssueOptionsFromCommandArgs()
-	if issueOpts.RepoName == "" {
-		log.Fatalf("%s: create-issue: -r flag needs to be set.\n", os.Args[0])
-	}
-	if issueOpts.Number == -1 {
-		log.Fatalf("%s: get-issues: -n flag needs to be assigned.\n", os.Args[0])
-	}
+func (a *App) CloseIssue() {
+	issue := a.GetIssue()
 
-	displayOptions(options, "Pick lock reason for this issue(type 0-3, or -1 to exit): ")
-	picked := getUpdateOption(options)
-	if picked == -1 {
-		return
-	}
-
-	username := Whoami()
-	lockData := map[string]string{
-		"lock_reason": options[picked],
-	}
-	jsonData, err := json.Marshal(lockData)
-	Check(err)
-
-	req, err := http.NewRequest("PUT", fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d/lock", username, issueOpts.RepoName, issueOpts.Number), bytes.NewBuffer(jsonData))
-	Check(err)
-
-	authToken := GetAuthToken()
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+authToken)
-	req.Header.Set("User-Agent", "CliGithubApp")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	Check(err)
-
-	if resp.StatusCode != http.StatusNoContent {
-		log.Fatalf("%s: couldn't lock issue: %s\n", os.Args[0], resp.Status)
-	}
-
-	fmt.Println("Issue was successfully locked!")
-}
-
-func CloseIssue() {
-	issueOpts := ParseIssueOptionsFromCommandArgs()
-	if issueOpts.RepoName == "" {
-		log.Fatalf("%s: update-issue: -r flag needs to be set.\n", os.Args[0])
-	}
-	if issueOpts.Number == -1 {
-		log.Fatalf("%s: update-issues: -n flag needs to be assigned.\n", os.Args[0])
-	}
-
-	issues := ListIssues()
-	if findIssue(issues, issueOpts.Number) == nil {
-		log.Fatalf("There is no issue with number: #%d for '%s' repo.\n", issueOpts.Number, issueOpts.RepoName)
-	}
-
-	username := Whoami()
-	authToken := GetAuthToken()
+	username := a.Whoami()
+	authToken := a.getAuthToken()
 	params := map[string]string{
 		"state": "closed",
 	}
 	paramsJSON, err := json.Marshal(params)
 	Check(err)
 
-	req, err := http.NewRequest("PATCH", fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d", username, issueOpts.RepoName, issueOpts.Number), bytes.NewBuffer(paramsJSON))
-	Check(err)
+	req, err := a.NewRequest("PATCH",
+		fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d",
+			username, issue.RepoName, issue.Number), bytes.NewBuffer(paramsJSON),
+		map[string]string{
+			"Authorization": "Bearer " + authToken,
+			"Content-Type":  "application/json",
+		})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error making request: %s", err)
+		os.Exit(1)
+	}
 
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+authToken)
-	req.Header.Set("User-Agent", "CliGithubApp")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	Check(err)
-	defer resp.Body.Close()
+	resp, err := a.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error while requesting: %s\n", err)
+		os.Exit(1)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		log.Fatalf("%s: issues was not closed: %s\n", os.Args[0], resp.Status)

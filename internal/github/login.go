@@ -1,7 +1,6 @@
-package githubcliapp
+package github
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -32,76 +32,69 @@ type AccessTokenResponse struct {
 
 const ClientID = "Iv23lisaqWSy9gCaljlM"
 
-func requestDeviceCode() ([]byte, error) {
+func (a *App) requestDeviceCode() ([]byte, error) {
 	data := url.Values{}
 	data.Set("client_id", ClientID)
 
-	req, err := http.NewRequest("POST", "https://github.com/login/device/code", strings.NewReader(data.Encode()))
+	req, err := a.NewRequest("POST", "https://github.com/login/device/code",
+		strings.NewReader(data.Encode()),
+		map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	Check(err)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error while requesting: %s\n", err)
+		os.Exit(1)
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: bad request status code: %d", os.Args[0], resp.StatusCode)
+		return nil, fmt.Errorf("ghcli: bad request status code: %d", resp.StatusCode)
 	}
 
 	return io.ReadAll(resp.Body)
 }
 
-func requestToken(deviceCode string) ([]byte, error) {
+func (a *App) requestToken(deviceCode string) ([]byte, error) {
 	data := url.Values{}
 	data.Set("client_id", ClientID)
 	data.Set("device_code", deviceCode)
 	data.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
-	req, err := http.NewRequest("POST", "https://github.com/login/oauth/access_token", strings.NewReader(data.Encode()))
+
+	req, err := a.NewRequest("POST", "https://github.com/login/oauth/access_token",
+		strings.NewReader(data.Encode()),
+		map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	Check(err)
-
+	resp, err := a.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error while requesting: %s\n", err)
+		os.Exit(1)
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: bad request status code: %d", os.Args[0], resp.StatusCode)
+		return nil, fmt.Errorf("ghcli: bad request status code: %d\n", resp.StatusCode)
 	}
 
 	return io.ReadAll(resp.Body)
 }
 
-func parseResponse(resp *http.Response) (*DeviceCodeResponse, error) {
-	var result DeviceCodeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("%s: error unmarshaling json", os.Args[0])
-	}
-	return &result, nil
-}
-
-func pollForToken(deviceCode string, interval int) {
+func (a *App) pollForToken(deviceCode string, interval int) {
 	for {
 		var at AccessTokenResponse
-		resp, err := requestToken(deviceCode)
-		Check(err)
-
+		resp, err := a.requestToken(deviceCode)
 		if err != nil {
-			log.Fatalf("%s: error unmarshaling json", os.Args[0])
+			fmt.Fprintf(os.Stderr, "ghcli: error while requesting for token: %s\n", err)
+			os.Exit(1)
 		}
 
 		if err := json.Unmarshal(resp, &at); err != nil {
-			log.Fatalf("%s: error unmarshaling json", os.Args[0])
+			log.Fatalf("ghcli: error unmarshaling json")
 		}
 
 		if at.ErrorResp != "" {
@@ -121,32 +114,36 @@ func pollForToken(deviceCode string, interval int) {
 			}
 		}
 
-		tokenName := "./.token"
-		tokenFile, err := os.Create(tokenName)
-		Check(err)
-		defer tokenFile.Close()
-		out := bufio.NewWriter(tokenFile)
-
-		_, err = out.WriteString(at.AccessToken)
-		Check(err)
-		out.Flush()
+		tokenDir := filepath.Join(os.Getenv("HOME"), ".config", "ghcli")
+		if err := os.MkdirAll(tokenDir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "ghcli: error creating directory %s: %s\n", tokenDir, err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(a.tokenPath, []byte(at.AccessToken), 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "ghcli: error writing to file %s: %s\n", a.tokenPath, err)
+			os.Exit(1)
+		}
 		break
 	}
 }
 
-func Login() {
+func (a *App) Login() {
 	var dc DeviceCodeResponse
-	resp, err := requestDeviceCode()
-	Check(err)
+	resp, err := a.requestDeviceCode()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error requesting device code: %s\n", err)
+		os.Exit(1)
+	}
 
 	if err := json.Unmarshal(resp, &dc); err != nil {
-		log.Fatalf("%s: error unmarshaling json", os.Args[0])
+		log.Fatalf("ghcli: error unmarshaling json\n")
+		os.Exit(1)
 	}
 
 	fmt.Printf("Please visit: %s\n", dc.VerificationURI)
 	fmt.Printf("and enter code: %s\n", dc.UserCode)
 
-	pollForToken(dc.DeviceCode, dc.Interval)
+	a.pollForToken(dc.DeviceCode, dc.Interval)
 
 	fmt.Println("Successfully authenticated!")
 }

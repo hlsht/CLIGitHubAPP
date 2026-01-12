@@ -1,41 +1,47 @@
-package githubcliapp
+package github
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 )
 
-func Whoami() string {
+func (a *App) Whoami() string {
 	var name struct {
 		Login string `json:"login"`
 	}
-	_, err := os.Stat("./.token")
-	if os.IsNotExist(err) {
-		log.Fatal("You are not authorized. Run the `login` command.")
+
+	authToken := a.getAuthToken()
+	req, err := a.NewRequest("GET", "https://api.github.com/user", nil, map[string]string{
+		"Authorization": "Bearer " + authToken,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error making request: %s\n", err)
+		os.Exit(1)
 	}
 
-	token, err := os.ReadFile("./.token")
-	Check(err)
-
-	req, err := http.NewRequest("GET", "https://api.github.com/user", nil)
-	Check(err)
-
-	req.Header.Set("User-Agent", "cli-github-application")
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+string(token))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	Check(err)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error while requesting: %s\n", err)
+		os.Exit(1)
+	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "ghcli: bad response status code: %s\n", resp.Status)
+		os.Exit(1)
+	}
 
 	body, err := io.ReadAll(resp.Body)
-	Check(err)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error reading response body: %s\n", err)
+		os.Exit(1)
+	}
 
-	err = json.Unmarshal(body, &name)
-	Check(err)
+	if err := json.Unmarshal(body, &name); err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error unmarshaling response: %s\n", err)
+		os.Exit(1)
+	}
 
 	return name.Login
 }

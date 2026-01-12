@@ -1,7 +1,8 @@
-package githubcliapp
+package github
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -11,28 +12,42 @@ type Repo struct {
 	Name string `json:"name"`
 }
 
-func ListRepos() []Repo {
+func (a *App) ListRepos() []Repo {
 	var repos []Repo
 
-	req, err := http.NewRequest("GET", "https://api.github.com/user/repos", nil)
-	Check(err)
+	authToken := a.getAuthToken()
+	req, err := a.NewRequest("GET", "https://api.github.com/user/repos", nil,
+		map[string]string{
+			"Authorization": "Bearer " + authToken,
+		})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error making request: %s", err)
+		os.Exit(1)
+	}
 
-	token, err := os.ReadFile("./.token")
-	Check(err)
-
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+string(token))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	Check(err)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error while requesting: %s\n", err)
+		os.Exit(1)
+	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "ghcli: bad response status code: %s\n", resp.Status)
+		os.Exit(1)
+	}
+
 	body, err := io.ReadAll(resp.Body)
-	Check(err)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error reading request body: %s\n", err)
+		os.Exit(1)
+	}
 
 	err = json.Unmarshal(body, &repos)
-	Check(err)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error unmarshaling json: %s\n", err)
+		os.Exit(1)
+	}
 
 	return repos
 }

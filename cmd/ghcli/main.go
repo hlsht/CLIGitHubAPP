@@ -2,45 +2,66 @@ package main
 
 import (
 	"fmt"
-	"githubcliapp"
 	"log"
 	"os"
+
+	"github.com/hlsht/CLIGitHubApp/internal/github"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatalf("usage: %s [help|close-issue|create-issue|get-issue|list-issue|list-repos|lock-issue|login|update-issue|whoami]", os.Args[0])
+		fmt.Fprintf(os.Stderr, "usage: %s <command>\n", os.Args[0])
+		os.Exit(1)
 	}
 
+	app := github.NewApp()
 	switch os.Args[1] {
 	case "help":
 		help()
 	case "close-issue":
-		githubcliapp.CloseIssue()
+		app.CloseIssue()
 	case "create-issue":
-		githubcliapp.CreateIssue()
+		app.CreateIssue()
 	case "get-issue":
-		githubcliapp.GetIssue()
+		github.DisplayIssue(app.GetIssue())
 	case "list-issues":
-		issues := githubcliapp.ListIssues()
+		issues := app.ListIssues()
 		for _, issue := range issues {
-			fmt.Printf("#%d - %s\n", issue.IssueNumber, issue.Title)
+			fmt.Printf("#%d - %s\n", issue.Number, issue.Title)
 		}
 	case "list-repos":
-		githubcliapp.ListRepos()
-	case "lock-issue":
-		githubcliapp.LockIssue()
+		isLogin := app.CheckAuthorization()
+		if !isLogin {
+			fmt.Fprintf(os.Stderr, "ghcli: you are not authorized run `login` command.\n")
+			os.Exit(1)
+		}
+		for _, repo := range app.ListRepos() {
+			fmt.Println(repo.Name)
+		}
 	case "login":
-		githubcliapp.Login()
+		app.Login()
 	case "update-issue":
-		githubcliapp.UpdateIssue()
+		app.UpdateIssue()
 	case "whoami":
-		fmt.Printf("You are @%s\n", githubcliapp.Whoami())
+		fmt.Printf("You are @%s\n", app.Whoami())
 	default:
-		log.Fatalf("%s: unknown command\n", os.Args[0])
+		log.Fatalf("%s: unknown command %s\n", os.Args[0], os.Args[1])
 	}
 }
 
 func help() {
-	fmt.Printf("usage: %s <create-issue | get-issue | list-issues| list-repos | login | update-issue | whoaim | help>\n", os.Args[0])
+	helpMessage := `CLIGitHubApp is a utility that helps you work with issue through the command line interface.
+
+Usage: ./ghcli <command>
+
+Where command can be:
+	login         use this command to login to the app before any other commands
+	create-issue  create an issue for the specified repository
+	get-issue     allows you to get information on the specified issue
+	list-issue    allows you to get all issues related to the specified repository
+	list-repos    shows all repositories that the application has access to
+	update-issue  allows you to update information related to specified issue
+	whoami        shows the username of the authorized user
+	help          shows this message`
+	fmt.Println(helpMessage)
 }

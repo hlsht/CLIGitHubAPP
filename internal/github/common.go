@@ -1,6 +1,7 @@
-package githubcliapp
+package github
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -12,8 +13,11 @@ func Check(err error) {
 	}
 }
 
-func GetAuthToken() string {
-	token, err := os.ReadFile("./.token")
-	Check(err)
+func (a *App) getAuthToken() string {
+	token, err := os.ReadFile(a.tokenPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ghcli: error reading token file: %s\n", err)
+		os.Exit(1)
+	}
 	return strings.TrimSpace(string(token))
 }
